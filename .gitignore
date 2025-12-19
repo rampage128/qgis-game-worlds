@@ -1,0 +1,4 @@
+.vscode/
+.prototypes/
+*.pyc
+__pycache__/
