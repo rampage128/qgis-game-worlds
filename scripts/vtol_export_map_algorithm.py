@@ -70,7 +70,7 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
     PARAMETER_CLIPPING_LAYER = "CLIPPING_LAYER"
     PARAMETER_SOURCE_SEA_LEVEL = "SEA_LEVEL"
     PARAMETER_OUTPUT_FOLDER = "OUTPUT_FOLDER"
-    PARAMETER_WATER_FALLOFF = "WATER_FALLOFF"
+    PARAMETER_SHORELINE_BIAS = "PARAMETER_SHORELINE_BIAS"
     PARAMETER_MAP_BIOME = "PARAMETER_MAP_BIOME"
     PARAMETER_MAP_EDGE = "PARAMETER_MAP_EDGE"
     PARAMETER_MAP_COAST = "PARAMETER_MAP_COAST"
@@ -80,24 +80,34 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
     PARAMETER_INCLUDE_COMPOSITION_FILES = "DEBUG_COMPOSITION"
 
     OPTIONS_RESAMPLING = {
-        "nearest": "nearest (blocky coasts, rough sharp peaks)",
-        "bilinear": "bilinear (gently blurred coasts, softened slopes)",
-        "cubic": "cubic (smoothly curved coasts, peaks with mild halos)",
-        "cubicspline": "cubic spline (very smooth coasts, very smooth peaks)",
-        "lanczos": "lanczos (sharp coasts, sharp peaks, some artifacts)",
-        "average": "average (soft blurred coasts, flattened terrain)",
-        "mode": "mode (stepped chunky coasts, plateaued peaks)",
-        "maximum": "Maximum (precise peaks, muted valleys)",
-        "minimum": "Minimum (muted peaks, precise valleys)",
-        "median": "Median (what ever the fuck this is)",
-        "q1": "First Quartile (soft version of Minimum)",
-        "q3": "Third Quartile (soft version of Maximum)",
+        "nearest": "Nearest (no resampling, noisy)",
+        "bilinear": "Bilinear (smoothed hills and valleys)",
+        "cubic": "Cubic (smoother hills and valleys)",
+        "cubicspline": "Cubic spline (very smooth hills and valleys)",
+        "lanczos": "Lanczos (maximum detail, punchy slopes)",
+        "average": "Average (muted/flattened terrain)",
+        "mode": "Mode (stepped terrain)",
+        "maximum": "Maximum (preserve peaks and ridges)",
+        "minimum": "Minimum (preserve dips and valleys)",
+        "median": "Median (clean slopes, filters noise)",
+        "q1": "First Quartile (slight focus on peaks and ridges)",
+        "q3": "Third Quartile (slight focus on dips and valleys)",
     }
-    OPTIONS_RESAMPLING_DEFAULT = list(OPTIONS_RESAMPLING.keys()).index("q3")
+    OPTIONS_RESAMPLING_DEFAULT = list(OPTIONS_RESAMPLING.keys()).index("lanczos")
 
     MAP_BIOME_OPTIONS = ["(From Map Area)", "Boreal", "Desert", "Arctic"]
     MAP_EDGE_OPTIONS = ["(From Map Area)", "Water", "Hills", "Coast"]
     MAP_COAST_OPTIONS = ["(From Map Area)", "North", "South", "East", "West"]
+
+    SHORELINE_BIAS_OPTIONS = [
+        "Maximum Land Details (Preserves all land details)",
+        "More Land Details (more focus on narrow land strips)",
+        "Balanced",
+        "More Water Details (more focus on narrow water strips)",
+        "Maximum Water Details (preserves all water details)",
+    ]
+    SHORELINE_BIAS_VALUES = [153.6, 115.2, 76.8, 38.4, 1.0]
+    SHORELINE_BIAS_DEFAULT = SHORELINE_BIAS_OPTIONS.index("Balanced")
 
     CITY_TYPE_BURNS = {
         "RURAL": [51, 205, 0, 0, 0],
@@ -216,38 +226,39 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
             parameters, self.PARAMETER_INCLUDE_COMPOSITION_FILES, context
         )
 
-        clipped_target_path = (
-            QgsProcessing.TEMPORARY_OUTPUT
-            if temporary
-            else str(output_folder_path / "01_clipped_target.tif")
-        )
-        water_mask_path = (
-            QgsProcessing.TEMPORARY_OUTPUT
-            if temporary
-            else str(output_folder_path / "02_water_mask.tif")
-        )
-        water_depth_map_path = (
-            QgsProcessing.TEMPORARY_OUTPUT
-            if temporary
-            else str(output_folder_path / "03_water_depth.tif")
-        )
-        blended_terrain_path = (
-            QgsProcessing.TEMPORARY_OUTPUT
-            if temporary
-            else str(output_folder_path / "04_blended_terrain.tif")
-        )
+        def path(name):
+            return (
+                QgsProcessing.TEMPORARY_OUTPUT
+                if temporary
+                else str(output_folder_path / f"{name}.tif")
+            )
+
+        hires_source = path("01_hires_source")
+        hires_terrain = path("02_hires_terrain")
+        hires_slope = path("03_hires_slope")
+        hires_mask = path("04_hires_mask")
+        hires_shore_mask = path("05_hires_shore")
+        hires_shore = path("06_hires_shore")
+
+        lores_terrain = path("07_lores_terrain")
+        lores_mask_weight = path("08_lores_mask_weight")
+        lores_mask = path("09_lores_mask")
+        lores_shore = path("10_lores_shore")
+        lores_bathy_gradient = path("11_lores_bathy_gradient")
+        lores_bathy_slope = path("12_lores_bathy_slope")
+        output = path("13_lores_blend")
+
+        float_compression = "COMPRESS=DEFLATE|PREDICTOR=3|ZLEVEL=6"
+        int_compression = "COMPRESS=DEFLATE|PREDICTOR=2|ZLEVEL=6"
 
         sea_level = self.parameterAsDouble(
             parameters, self.PARAMETER_SOURCE_SEA_LEVEL, context
         )
 
-        water_falloff_distance = self.parameterAsDouble(
-            parameters, self.PARAMETER_WATER_FALLOFF, context
+        water_retention_index = self.parameterAsEnum(
+            parameters, self.PARAMETER_SHORELINE_BIAS, context
         )
-
-        feedback.setProgressText(
-            self.tr("Generating Heightmap (1/4): Clipping DEM Data")
-        )
+        water_retention = self.SHORELINE_BIAS_VALUES[water_retention_index]
 
         source_layer = self.parameterAsRasterLayer(
             parameters, self.PARAMETER_HEIGHT_SOURCE_LAYER, context
@@ -258,104 +269,246 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
             parameters, self.PARAMETER_RESAMPLING, context
         )
 
-        clipped_target = processing.run(
+        height_step = 5.9607843137
+        pixel_size = 153.6
+
+        # 1. REPROJECT SOURCE:
+        feedback.setProgressText("Generating Heightmap (1/13): Clipping DEM Data")
+        hires_source = processing.run(
             "gdal:warpreproject",
             {
                 "INPUT": source_layer,
                 "SOURCE_CRS": source_layer,
                 "TARGET_CRS": map_area["crs"],
-                "RESAMPLING": resampling_index,
+                "RESAMPLING": 0,
                 "NODATA": None,
-                "OPTIONS": "COMPRESS=DEFLATE|PREDICTOR=2|ZLEVEL=9",
-                "DATA_TYPE": 6,  # use source format
+                "OPTIONS": float_compression,
+                "DATA_TYPE": 6,  # Float32
                 "TARGET_EXTENT": map_area["extent"],
                 "TARGET_EXTENT_CRS": map_area["crs"],
-                "EXTRA": f"-ts {target_width} {target_width} -ovr NONE -wt Float32 -multi -wo NUM_THREADS=ALL_CPUS -to ALLOW_BALLPARK=NO -to ONLY_BEST=YES",
-                "OUTPUT": clipped_target_path,  # path to a tiff file or temporary
+                "EXTRA": f"-ovr NONE -wt Float32 -multi -wo NUM_THREADS=ALL_CPUS -to ALLOW_BALLPARK=NO -to ONLY_BEST=YES",
+                "OUTPUT": hires_source,  # path to a tiff file or temporary
             },
             context=context,
             feedback=feedback,
             is_child_algorithm=True,
         )["OUTPUT"]
 
-        feedback.setProgressText(
-            self.tr("Generating Heightmap (2/4): Detecting Water Surface")
-        )
-
-        water_mask_sea_level = sea_level + 0.5  # +2.4902
-
-        water_mask = processing.run(
+        # 2. EXTRACT TERRAIN, SHIFT TO USER SEA LEVEL AND CUT OFF <= 0 TERRAIN
+        feedback.setProgressText("Generating Heightmap (2/13): Extracting Terrain")
+        hires_terrain = processing.run(
             "gdal:rastercalculator",
             {
                 # sets everything above sea_level to 255 (and everything else to 0)
-                "FORMULA": f"(A > ({water_mask_sea_level})) * 255",
-                # uint16 to prevent issues during blending stage
-                "RTYPE": 2,
+                "FORMULA": f"((A - {sea_level}) > 0) * (A - {sea_level})",
+                # Float 32 for highest accuracy
+                "RTYPE": 5,
                 # options
-                "INPUT_A": clipped_target,
+                "INPUT_A": hires_source,
                 "BAND_A": 1,
-                "OUTPUT": water_mask_path,
+                "OUTPUT": hires_terrain,
             },
             context=context,
             feedback=feedback,
             is_child_algorithm=True,
         )["OUTPUT"]
 
-        feedback.setProgressText(
-            self.tr("Generating Heightmap (3/4): Simulating Water Depth")
-        )
-
-        max_water_falloff = round(water_falloff_distance / self.HORIZONTAL_RESOLUTION)
-
-        water_depth_map = processing.run(
-            "gdal:proximity",
-            {
-                # creates a gradient from 0 at shoreline to water_falloff_distance in meters
-                "UNITS": 1,
-                "MAX_DISTANCE": max_water_falloff,
-                # fills areas exceeding MAX_DISTANCE with the fixed max value (NODATA)
-                "NODATA": max_water_falloff,
-                # uint16 allows up to ~65km falloff
-                "DATA_TYPE": 2,
-                # options
-                "INPUT": water_mask,
-                "BAND": 1,
-                "OUTPUT": water_depth_map_path,
-            },
+        # 3. CAPTURE SOURCE TERRAIN SLOPES USED TO INFER BATHYMETRY SLOPES
+        feedback.setProgressText("Generating Heightmap (3/13): Calculating Slopes")
+        hires_slope = processing.run(
+            "gdal:slope",
+            {"INPUT": hires_source, "AS_PERCENT": True, "OUTPUT": hires_slope},
             context=context,
             feedback=feedback,
-            is_child_algorithm=True,
         )["OUTPUT"]
 
-        feedback.setProgressText(
-            self.tr("Generating Heightmap (4/4): Blending Terrain and Water")
-        )
-
-        water_scale_factor = 12 / (max_water_falloff - 1.0)
-        water_formula = f"round(12 - ((B - 1.0) * {water_scale_factor}))"
-
-        # land_formula = f"round(((A + 80.0) / {self.ALTITUDE_RESOLUTION}) + 12 - (({sea_level} + 80.0) / {self.ALTITUDE_RESOLUTION}))"
-        land_formula = f"floor(((maximum(A, {sea_level}) - {sea_level}) / {self.ALTITUDE_RESOLUTION}) + 12.58)"
-
-        blended_terrain = processing.run(
+        # 4. CAPTURE HIRES WATER MASK FOR SHORELINE PRECISION
+        feedback.setProgressText("Generating Heightmap (4/13): Detecting Shorelines")
+        hires_mask = processing.run(
             "gdal:rastercalculator",
             {
-                "RTYPE": 2,  # uint16
-                "FORMULA": f"(C > 0) * {land_formula} + (C == 0) * {water_formula}",
-                "INPUT_A": clipped_target,
+                "INPUT_A": hires_terrain,
                 "BAND_A": 1,
-                "INPUT_B": water_depth_map,
+                # Byte
+                "RTYPE": 0,
+                "FORMULA": "A > 0",
+                "OUTPUT": hires_mask,
+            },
+            context=context,
+            feedback=feedback,
+        )["OUTPUT"]
+
+        # 5. CREATE HIRES SHORELINE MASK OF ~3PX width
+        feedback.setProgressText("Generating Heightmap (5/13): Masking Shorelines")
+        hires_shore_mask = processing.run(
+            "gdal:proximity",
+            {
+                "INPUT": hires_mask,
+                "VALUES": "0",
+                "UNITS": 1,
+                "REPLACE": 1,
+                "MAX_DISTANCE": 3,
+                "OUTPUT": hires_shore_mask,
+                "NODATA": 0,
+            },
+            context=context,
+            feedback=feedback,
+        )["OUTPUT"]
+
+        # 6. CREATE HIRES SHORELINE SEED
+        feedback.setProgressText(
+            "Generating Heightmap (6/13): Calculating shore steepness"
+        )
+        hires_shore = processing.run(
+            "gdal:rastercalculator",
+            {
+                "INPUT_A": hires_shore_mask,
+                "BAND_A": 1,
+                "INPUT_B": hires_slope,
                 "BAND_B": 1,
-                "INPUT_C": water_mask,
-                "BAND_C": 1,
-                "OUTPUT": blended_terrain_path,
+                "FORMULA": "where(A > 0, B, -9999)",
+                "NO_DATA": -9999,
+                "OUTPUT": hires_shore,
+            },
+            context=context,
+            feedback=feedback,
+        )["OUTPUT"]
+
+        # 7. DOWNSAMPLING
+        feedback.setProgressText(
+            f"Generating Heightmap (7/13): Resampling terrain using {list(self.OPTIONS_RESAMPLING.keys())[resampling_index]}"
+        )
+        lores_terrain = processing.run(
+            "gdal:warpreproject",
+            {
+                "INPUT": hires_terrain,
+                "RESAMPLING": resampling_index,
+                "NODATA": None,
+                "DATA_TYPE": 6,  # Float32
+                "OPTIONS": float_compression,
+                "EXTRA": f"-ts {target_width} {target_width} -ovr NONE -wt Float32 -multi -wo NUM_THREADS=ALL_CPUS -to ALLOW_BALLPARK=NO -to ONLY_BEST=YES",
+                "OUTPUT": lores_terrain,
             },
             context=context,
             feedback=feedback,
             is_child_algorithm=True,
         )["OUTPUT"]
 
-        return blended_terrain
+        feedback.setProgressText("Generating Heightmap (8/13): Resampling shorelines")
+        lores_mask_weight = processing.run(
+            "gdal:warpreproject",
+            {
+                "INPUT": hires_mask,
+                "RESAMPLING": list(self.OPTIONS_RESAMPLING.keys()).index("average"),
+                "NODATA": None,
+                "DATA_TYPE": 6,  # Float32
+                "OPTIONS": int_compression,
+                "EXTRA": f"-ts {target_width} {target_width} -ovr NONE -multi -wo NUM_THREADS=ALL_CPUS -to ALLOW_BALLPARK=NO -to ONLY_BEST=YES",
+                "OUTPUT": lores_mask_weight,
+            },
+            context=context,
+            feedback=feedback,
+            is_child_algorithm=True,
+        )["OUTPUT"]
+
+        feedback.setProgressText("Generating Heightmap (9/13): Finetuning shorelines")
+        lores_mask = processing.run(
+            "gdal:rastercalculator",
+            {
+                "INPUT_A": lores_mask_weight,
+                "BAND_A": 1,
+                "FORMULA": f"A > (({pixel_size} - {water_retention}) / {pixel_size})",
+                "RTYPE": 0,  # Byte
+                "OUTPUT": lores_mask,
+            },
+            context=context,
+            feedback=feedback,
+        )["OUTPUT"]
+
+        feedback.setProgressText(
+            "Generating Heightmap (10/13): Resampling shoreline steepness"
+        )
+        lores_shore = processing.run(
+            "gdal:warpreproject",
+            {
+                "INPUT": hires_shore,
+                "RESAMPLING": list(self.OPTIONS_RESAMPLING.keys()).index("maximum"),
+                "NODATA": None,
+                "DATA_TYPE": 6,  # Float32
+                "OPTIONS": float_compression,
+                "EXTRA": f"-ts {target_width} {target_width} -ovr NONE -wt Float32 -multi -wo NUM_THREADS=ALL_CPUS -to ALLOW_BALLPARK=NO -to ONLY_BEST=YES",
+                "OUTPUT": lores_shore,
+            },
+            context=context,
+            feedback=feedback,
+            is_child_algorithm=True,
+        )["OUTPUT"]
+
+        # 8. CREATE BATHYMETRY SLOPES FROM SHORE SEED
+        feedback.setProgressText(
+            "Generating Heightmap (11/13): Generating bathymetry slopes"
+        )
+        lores_bathy_slope = processing.run(
+            "gdal:fillnodata",
+            {
+                "INPUT": lores_shore,
+                "DISTANCE": 20,
+                "OUTPUT": lores_bathy_slope,
+                "ITERATIONS": 3,
+            },
+            context=context,
+            feedback=feedback,
+        )["OUTPUT"]
+
+        # 9. CREATE BATHYMETRY GRADIENT (this is the shallowest possible non-banding slope for 12 height levels)
+        feedback.setProgressText(
+            "Generating Heightmap (12/13): Generating bathymetry gradient"
+        )
+        max_bathy_distance = pixel_size * 13
+        lores_bathy_gradient = processing.run(
+            "gdal:proximity",
+            {
+                "INPUT": lores_mask,
+                "VALUES": "1",
+                "UNITS": 0,
+                "OUTPUT": lores_bathy_gradient,
+                "MAX_DISTANCE": max_bathy_distance,
+                "NODATA": max_bathy_distance,
+            },
+            context=context,
+            feedback=feedback,
+        )["OUTPUT"]
+
+        # 10. BLEND EVERYTHING AND QUANTIZE INTO FINAL IMAGE... (AND PRAY IT LOOKS GOOD)
+        feedback.setProgressText(
+            "Generating Heightmap (13/13): Blending final heightmap"
+        )
+        zero_offset = 80 - 2.5098039219
+        output = processing.run(
+            "gdal:rastercalculator",
+            {
+                "INPUT_A": lores_terrain,
+                "BAND_A": 1,
+                "INPUT_B": lores_mask,
+                "BAND_B": 1,
+                "INPUT_C": lores_bathy_gradient,
+                "BAND_C": 1,
+                "INPUT_D": lores_bathy_slope,
+                "BAND_D": 1,
+                "OUTPUT": output,
+                "EXTRA": "--hideNoData",
+                "FORMULA": (
+                    f"round(maximum(0, minimum(where(B == 0, "
+                    f"maximum(-80, minimum(-(C * (D / 100.0)), "
+                    f"-(C / {pixel_size} * {height_step}))), "
+                    f"A) + {zero_offset}, 6080)) * (1 / {height_step}))"
+                ),
+            },
+            context=context,
+            feedback=feedback,
+        )["OUTPUT"]
+
+        return output
 
     # TODO: Combine this with _write_height...
     def _write_height_x(
@@ -375,7 +528,7 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
         merged_height_path = (
             QgsProcessing.TEMPORARY_OUTPUT
             if temporary
-            else str(output_folder_path / f"06_height{index}_merged.tif")
+            else str(output_folder_path / f"14_height{index}_merged.tif")
         )
         output_path = str(output_folder_path / f"height{index}.png")
 
@@ -441,7 +594,7 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
         merged_height_path = (
             QgsProcessing.TEMPORARY_OUTPUT
             if temporary
-            else str(output_folder_path / f"06_height_merged.tif")
+            else str(output_folder_path / f"14_height_merged.tif")
         )
         output_path = str(output_folder_path / f"height.png")
 
@@ -598,11 +751,11 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
         )
 
         self.addParameter(
-            QgsProcessingParameterNumber(
-                self.PARAMETER_WATER_FALLOFF,
-                self.tr("Water Falloff Distance (meters)"),
-                type=QgsProcessingParameterNumber.Integer,
-                defaultValue=2000,
+            QgsProcessingParameterEnum(
+                self.PARAMETER_SHORELINE_BIAS,
+                self.tr("Shoreline Detail Priority"),
+                options=self.SHORELINE_BIAS_OPTIONS,
+                defaultValue=self.SHORELINE_BIAS_DEFAULT,
             )
         )
 
@@ -783,8 +936,8 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
             "<ul>"
             "<li><b>Digital Elevation Model:</b> Select your height data layer here.</li>"
             "<li><b>Sea Level Altitude:</b> Allows you to change the sea level to adjust up or down.</li>"
-            "<li><b>Water Falloff Distance:</b> All water will be filled with a smooth gradient around the coast. This defines how large the gradient should be in meters.</li>"
-            '<li><b>Resampling Method:</b> Smoothes the image during rescaling. Hard to give a good advice on what to pick, but "Third Quartile" and "Maximum" are a solid choice.</li>'
+            "<li><b>Shoreline Detail Priority:</b> Decides wether to preserve water or land features that are smaller than the terrain resolution.</li>"
+            "<li><b>Resampling Method:</b> Smoothes the image during rescaling. Pick what fits your terrain best. This does not affect the shorelines.</li>"
             "<li><b>Generate debug files:</b> This will generate all the images of the intermediate steps for debugging. Those images can be loaded into QGIS and used to compare with the source data.</li>"
             "</ul>"
             "<h4>City Data</h4>"
