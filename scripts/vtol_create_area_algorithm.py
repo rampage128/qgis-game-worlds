@@ -481,7 +481,12 @@ class Highlighter(QgsAbstractProcessingParameterWidgetWrapper):
         # 2. Create a Cross Symbol
         # 'cross' is the standard X shape
         symbol = QgsMarkerSymbol.createSimple(
-            {"name": "cross2", "color": "red", "outline_width": "0.6", "size": "3"}
+            {
+                "name": "cross2",
+                "outline_color": "red",
+                "outline_width": "0.6",
+                "size": "3",
+            }
         )
         self.marker_item.setSymbol(symbol)
         self.marker_item.setZIndex(3)  # Ensure it is on top
