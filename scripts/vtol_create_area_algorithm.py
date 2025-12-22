@@ -461,10 +461,12 @@ class Highlighter(QgsAbstractProcessingParameterWidgetWrapper):
         )
         self.preview_area.setSymbol(symbol)
         self.preview_area.setZIndex(1)  # Bottom
+        self.preview_area.setEnabled(False)
         self.anno_layer.addItem(self.preview_area)
 
         self.label = QgsAnnotationPointTextItem(None, QgsPointXY(0, 0))
         self.label.setZIndex(2)
+        self.label.setEnabled(False)
         self.label.setAlignment(Qt.AlignCenter)
         self.item_id = self.anno_layer.addItem(self.label)
 
@@ -490,6 +492,7 @@ class Highlighter(QgsAbstractProcessingParameterWidgetWrapper):
         )
         self.marker_item.setSymbol(symbol)
         self.marker_item.setZIndex(3)  # Ensure it is on top
+        self.marker_item.setEnabled(False)
         self.anno_layer.addItem(self.marker_item)
 
         # canvas.extentsChanged.connect(self._update_rbs)
@@ -531,8 +534,14 @@ class Highlighter(QgsAbstractProcessingParameterWidgetWrapper):
             self.point, user_size, user_size
         )
 
+        isValidMapArea = not self.user_extent.isEmpty()
+
+        self.marker_item.setEnabled(isValidMapArea)
+        self.label.setEnabled(isValidMapArea)
+        self.preview_area.setEnabled(isValidMapArea)
+
         # Bail out if user extent is empty
-        if self.user_extent.isEmpty():
+        if not isValidMapArea:
             return
 
         # Calculate map area and preview extent
