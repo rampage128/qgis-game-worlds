@@ -39,7 +39,7 @@ from qgis.gui import (
 )
 from qgis.PyQt.QtCore import QMetaType, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QPainter
-from qgis.PyQt.QtWidgets import QWidget, QVBoxLayout, QSizePolicy, QSlider
+from qgis.PyQt.QtWidgets import QWidget, QVBoxLayout, QSizePolicy, QSlider, QComboBox
 
 from qgis.utils import iface
 import math
@@ -398,6 +398,13 @@ class CanvasClickTool(QgsMapToolEmitPoint):
 
 
 class Highlighter(QgsAbstractProcessingParameterWidgetWrapper):
+
+    MAP_SOURCES = {
+        "Google Terrain Hybrid": "type=xyz&url=https://mt1.google.com/vt/lyrs%3Dp%26x%3D%7Bx%7D%26y%3D%7By%7D%26z%3D%7Bz%7D&zmax=19&zmin=0",
+        "Google Satellite Hybrid": "type=xyz&url=https://mt1.google.com/vt/lyrs%3Dy%26x%3D%7Bx%7D%26y%3D%7By%7D%26z%3D%7Bz%7D&zmax=19&zmin=0",
+        "OpenStreetMap": "type=xyz&url=https://tile.openstreetmap.org/{z}/{x}/{y}.png&zmax=19&zmin=0",
+    }
+
     def __init__(self, parameter, dialog, row, col, **kwargs):
         super().__init__(parameter, QgsProcessingGui.WidgetType.Standard)
 
@@ -421,6 +428,10 @@ class Highlighter(QgsAbstractProcessingParameterWidgetWrapper):
             QgsAnnotationLayer.LayerOptions(QgsProject.instance().transformContext()),
         )
 
+        self.combo = QComboBox()
+        self.combo.addItems(self.MAP_SOURCES.keys())
+        self.combo.currentIndexChanged.connect(self.mapChanged)
+
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setRange(8, 64)
         self.slider.setSingleStep(1)
@@ -438,15 +449,15 @@ class Highlighter(QgsAbstractProcessingParameterWidgetWrapper):
 
         self.canvas = canvas
 
-        url = (
-            "type=xyz&url=https://tile.openstreetmap.org/{z}/{x}/{y}.png&zmax=19&zmin=0"
-        )
-        self.osm_layer = QgsRasterLayer(url, "OpenStreetMap", "wms")
+        map_source = list(self.MAP_SOURCES.values())[0]
+        map_name = list(self.MAP_SOURCES.keys())[0]
+        self.osm_layer = QgsRasterLayer(map_source, map_name, "wms")
         if self.osm_layer.isValid():
             QgsProject.instance().addMapLayer(self.osm_layer, False)
             canvas.setLayers([self.anno_layer, self.osm_layer])
             canvas.setExtent(self.osm_layer.extent())
 
+        layout.addWidget(self.combo)
         layout.addWidget(canvas)
         layout.addWidget(self.slider)
 
@@ -502,6 +513,12 @@ class Highlighter(QgsAbstractProcessingParameterWidgetWrapper):
         canvas.setMapTool(self.clicker)
 
         return self.container
+
+    def mapChanged(self, index: int):
+        name = list(self.MAP_SOURCES.keys())[index]
+        source = list(self.MAP_SOURCES.values())[index]
+        self.osm_layer.setDataSource(source, name, "wms", False)
+        self.osm_layer.triggerRepaint()
 
     def pointChanged(self, point: QgsPointXY):
         self.point = point
