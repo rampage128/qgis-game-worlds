@@ -106,7 +106,7 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
         "More Water Details (more focus on narrow water strips)",
         "Maximum Water Details (preserves all water details)",
     ]
-    SHORELINE_BIAS_VALUES = [153.6, 115.2, 76.8, 38.4, 1.0]
+    SHORELINE_BIAS_VALUES = [0.2, 0.5, 1.0, 2.5, 5.0]
     SHORELINE_BIAS_DEFAULT = SHORELINE_BIAS_OPTIONS.index("Balanced")
 
     CITY_TYPE_BURNS = {
@@ -242,11 +242,10 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
 
         lores_terrain = path("07_lores_terrain")
         lores_mask_weight = path("08_lores_mask_weight")
-        lores_mask = path("09_lores_mask")
-        lores_shore = path("10_lores_shore")
-        lores_bathy_gradient = path("11_lores_bathy_gradient")
-        lores_bathy_slope = path("12_lores_bathy_slope")
-        output = path("13_lores_blend")
+        lores_shore = path("9_lores_shore")
+        lores_bathy_gradient = path("10_lores_bathy_gradient")
+        lores_bathy_slope = path("11_lores_bathy_slope")
+        output = path("12_lores_blend")
 
         float_compression = "COMPRESS=DEFLATE|PREDICTOR=3|ZLEVEL=6"
         int_compression = "COMPRESS=DEFLATE|PREDICTOR=2|ZLEVEL=6"
@@ -273,7 +272,7 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
         pixel_size = 153.6
 
         # 1. REPROJECT SOURCE:
-        feedback.setProgressText("Generating Heightmap (1/13): Clipping DEM Data")
+        feedback.setProgressText("Generating Heightmap (1/12): Clipping DEM Data")
         hires_source = processing.run(
             "gdal:warpreproject",
             {
@@ -295,7 +294,7 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
         )["OUTPUT"]
 
         # 2. EXTRACT TERRAIN, SHIFT TO USER SEA LEVEL AND CUT OFF <= 0 TERRAIN
-        feedback.setProgressText("Generating Heightmap (2/13): Extracting Terrain")
+        feedback.setProgressText("Generating Heightmap (2/12): Extracting Terrain")
         hires_terrain = processing.run(
             "gdal:rastercalculator",
             {
@@ -314,7 +313,7 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
         )["OUTPUT"]
 
         # 3. CAPTURE SOURCE TERRAIN SLOPES USED TO INFER BATHYMETRY SLOPES
-        feedback.setProgressText("Generating Heightmap (3/13): Calculating Slopes")
+        feedback.setProgressText("Generating Heightmap (3/12): Calculating Slopes")
         hires_slope = processing.run(
             "gdal:slope",
             {"INPUT": hires_source, "AS_PERCENT": True, "OUTPUT": hires_slope},
@@ -323,7 +322,7 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
         )["OUTPUT"]
 
         # 4. CAPTURE HIRES WATER MASK FOR SHORELINE PRECISION
-        feedback.setProgressText("Generating Heightmap (4/13): Detecting Shorelines")
+        feedback.setProgressText("Generating Heightmap (4/12): Detecting Shorelines")
         hires_mask = processing.run(
             "gdal:rastercalculator",
             {
@@ -339,7 +338,7 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
         )["OUTPUT"]
 
         # 5. CREATE HIRES SHORELINE MASK OF ~3PX width
-        feedback.setProgressText("Generating Heightmap (5/13): Masking Shorelines")
+        feedback.setProgressText("Generating Heightmap (5/12): Masking Shorelines")
         hires_shore_mask = processing.run(
             "gdal:proximity",
             {
@@ -357,7 +356,7 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
 
         # 6. CREATE HIRES SHORELINE SEED
         feedback.setProgressText(
-            "Generating Heightmap (6/13): Calculating shore steepness"
+            "Generating Heightmap (6/12): Calculating shore steepness"
         )
         hires_shore = processing.run(
             "gdal:rastercalculator",
@@ -376,7 +375,7 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
 
         # 7. DOWNSAMPLING
         feedback.setProgressText(
-            f"Generating Heightmap (7/13): Resampling terrain using {list(self.OPTIONS_RESAMPLING.keys())[resampling_index]}"
+            f"Generating Heightmap (7/12): Resampling terrain using {list(self.OPTIONS_RESAMPLING.keys())[resampling_index]}"
         )
         lores_terrain = processing.run(
             "gdal:warpreproject",
@@ -394,7 +393,7 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
             is_child_algorithm=True,
         )["OUTPUT"]
 
-        feedback.setProgressText("Generating Heightmap (8/13): Resampling shorelines")
+        feedback.setProgressText("Generating Heightmap (8/12): Resampling shorelines")
         lores_mask_weight = processing.run(
             "gdal:warpreproject",
             {
@@ -411,22 +410,8 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
             is_child_algorithm=True,
         )["OUTPUT"]
 
-        feedback.setProgressText("Generating Heightmap (9/13): Finetuning shorelines")
-        lores_mask = processing.run(
-            "gdal:rastercalculator",
-            {
-                "INPUT_A": lores_mask_weight,
-                "BAND_A": 1,
-                "FORMULA": f"A > (({pixel_size} - {water_retention}) / {pixel_size})",
-                "RTYPE": 0,  # Byte
-                "OUTPUT": lores_mask,
-            },
-            context=context,
-            feedback=feedback,
-        )["OUTPUT"]
-
         feedback.setProgressText(
-            "Generating Heightmap (10/13): Resampling shoreline steepness"
+            "Generating Heightmap (9/12): Resampling shoreline steepness"
         )
         lores_shore = processing.run(
             "gdal:warpreproject",
@@ -446,7 +431,7 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
 
         # 8. CREATE BATHYMETRY SLOPES FROM SHORE SEED
         feedback.setProgressText(
-            "Generating Heightmap (11/13): Generating bathymetry slopes"
+            "Generating Heightmap (10/12): Generating bathymetry slopes"
         )
         lores_bathy_slope = processing.run(
             "gdal:fillnodata",
@@ -462,13 +447,13 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
 
         # 9. CREATE BATHYMETRY GRADIENT (this is the shallowest possible non-banding slope for 12 height levels)
         feedback.setProgressText(
-            "Generating Heightmap (12/13): Generating bathymetry gradient"
+            "Generating Heightmap (11/12): Generating bathymetry gradient"
         )
         max_bathy_distance = pixel_size * 13
         lores_bathy_gradient = processing.run(
             "gdal:proximity",
             {
-                "INPUT": lores_mask,
+                "INPUT": lores_mask_weight,
                 "VALUES": "1",
                 "UNITS": 0,
                 "OUTPUT": lores_bathy_gradient,
@@ -481,15 +466,23 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
 
         # 10. BLEND EVERYTHING AND QUANTIZE INTO FINAL IMAGE... (AND PRAY IT LOOKS GOOD)
         feedback.setProgressText(
-            "Generating Heightmap (13/13): Blending final heightmap"
+            "Generating Heightmap (12/12): Blending final heightmap"
         )
         zero_offset = 80 - 2.5098039219
+
+        interpolation_weight = f"pow(B, {water_retention})"
+        bathy_formula = (
+            f"maximum(-80, minimum(-(C * (D / 100.0)), "
+            f"-(C / {pixel_size} * {height_step})))"
+        )
+        interpolation_formula = f"((A * {interpolation_weight}) + ({bathy_formula} * (1 - {interpolation_weight})))"
+
         output = processing.run(
             "gdal:rastercalculator",
             {
                 "INPUT_A": lores_terrain,
                 "BAND_A": 1,
-                "INPUT_B": lores_mask,
+                "INPUT_B": lores_mask_weight,
                 "BAND_B": 1,
                 "INPUT_C": lores_bathy_gradient,
                 "BAND_C": 1,
@@ -498,10 +491,8 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
                 "OUTPUT": output,
                 "EXTRA": "--hideNoData",
                 "FORMULA": (
-                    f"round(maximum(0, minimum(where(B == 0, "
-                    f"maximum(-80, minimum(-(C * (D / 100.0)), "
-                    f"-(C / {pixel_size} * {height_step}))), "
-                    f"A) + {zero_offset}, 6080)) * (1 / {height_step}))"
+                    f"round(maximum(0, minimum({interpolation_formula} + {zero_offset}, 6080)) "
+                    f"* (1 / {height_step}))"
                 ),
             },
             context=context,
@@ -528,7 +519,7 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
         merged_height_path = (
             QgsProcessing.TEMPORARY_OUTPUT
             if temporary
-            else str(output_folder_path / f"14_height{index}_merged.tif")
+            else str(output_folder_path / f"13_height{index}_merged.tif")
         )
         output_path = str(output_folder_path / f"height{index}.png")
 
@@ -594,7 +585,7 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
         merged_height_path = (
             QgsProcessing.TEMPORARY_OUTPUT
             if temporary
-            else str(output_folder_path / f"14_height_merged.tif")
+            else str(output_folder_path / f"13_height_merged.tif")
         )
         output_path = str(output_folder_path / f"height.png")
 
