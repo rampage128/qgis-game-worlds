@@ -534,7 +534,9 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
             term = f"((B == {city_index_value}) * {city_level_colors[color_index]})"
             city_terms.append(term)
 
-        city_term = "0" if city_layer is None else " + ".join(city_terms)
+        city_term = (
+            "0" if city_layer is None else f"(A >= 13) * ({" + ".join(city_terms)})"
+        )
 
         merged_height = processing.run(
             "gdal:rastercalculator",
@@ -598,7 +600,9 @@ class VtolExportMapAlgorithmV2(QgsProcessingAlgorithm):
             term = f"((B == {city_index_value}) * {city_level_colors[0]})"
             city_terms.append(term)
 
-        city_term = "0" if city_layer is None else " + ".join(city_terms)
+        city_term = (
+            "0" if city_layer is None else f"(A >= 13) * ({" + ".join(city_terms)})"
+        )
 
         merged_height = processing.run(
             "gdal:rastercalculator",
