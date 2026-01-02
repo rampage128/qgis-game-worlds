@@ -28,6 +28,7 @@ from qgis.core import (
     QgsProcessingParameterVectorLayer,
     QgsFeature,
     QgsSettings,
+    Qgis,
 )
 
 from qgis.PyQt.QtCore import QVariant
@@ -163,12 +164,33 @@ class VtolImportOpenTopoAlgorithm(QgsProcessingAlgorithm):
 
         feedback.setProgressText(self.tr(f"Importing DEM (1/2): Fetching DEM Data"))
 
+        project_context = QgsProject.instance().transformContext()
         epsg_4326 = QgsCoordinateReferenceSystem("EPSG:4326")
+        if not project_context.hasTransform(map_area_layer.crs(), epsg_4326):
+            operation = project_context.calculateCoordinateOperation(
+                map_area_layer.crs(), epsg_4326
+            )
+            project_context.addCoordinateOperation(
+                map_area_layer.crs(), epsg_4326, operation
+            )
+            QgsProject.instance().setTransformContext(project_context)
         to_pseudo = QgsCoordinateTransform(
-            map_area_layer.crs(), epsg_4326, QgsProject.instance().transformContext()
+            map_area_layer.crs(), epsg_4326, project_context
         )
+
+        if not to_pseudo.isValid():
+            raise QgsProcessingException(
+                f"Transform from {map_area_layer.crs().authid()} to {epsg_4326.authid()} is not valid."
+            )
+
         map_area_geometry = QgsGeometry.fromRect(map_area_layer.extent())
-        map_area_geometry.transform(to_pseudo)
+        transform_result = map_area_geometry.transform(to_pseudo)
+
+        if transform_result != Qgis.GeometryOperationResult.Success:
+            raise QgsProcessingException(
+                f"Transform from {map_area_layer.crs().authid()} to {epsg_4326.authid()} failed with status: {transform_result}"
+            )
+
         xyz_extent = map_area_geometry.boundingBox()
 
         dem_data = self._download_dem(dem_source, xyz_extent, api_key, feedback)
