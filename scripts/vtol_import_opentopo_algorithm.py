@@ -165,7 +165,7 @@ class VtolImportOpenTopoAlgorithm(QgsProcessingAlgorithm):
 
         epsg_4326 = QgsCoordinateReferenceSystem("EPSG:4326")
         to_pseudo = QgsCoordinateTransform(
-            map_area_layer.crs(), epsg_4326, QgsProject.instance()
+            map_area_layer.crs(), epsg_4326, QgsProject.instance().transformContext()
         )
         map_area_geometry = QgsGeometry.fromRect(map_area_layer.extent())
         map_area_geometry.transform(to_pseudo)
