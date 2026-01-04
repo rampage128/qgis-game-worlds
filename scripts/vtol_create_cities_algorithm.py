@@ -16,6 +16,7 @@ from qgis.core import (
     QgsExpression,
     QgsProcessingParameterVectorLayer,
     QgsFeature,
+    QgsProcessingContext,
 )
 from qgis.PyQt.QtCore import QMetaType, QVariant
 from qgis.PyQt.QtGui import QColor
@@ -137,6 +138,13 @@ class VtolCreateCitiesAlgorithm(QgsProcessingAlgorithm):
         output_layer.setRenderer(renderer)
 
         output_layer.commitChanges()
+
+        context.addLayerToLoadOnCompletion(
+            dest_id,
+            QgsProcessingContext.LayerDetails(
+                f"{area["name"]} (cities)", context.project()
+            ),
+        )
 
         return {self.OUTPUT: dest_id}
 

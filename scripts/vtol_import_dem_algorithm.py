@@ -192,7 +192,7 @@ class VtolImportDemAlgorithm(QgsProcessingAlgorithm):
         context.addLayerToLoadOnCompletion(
             output,
             QgsProcessingContext.LayerDetails(
-                "Digital Elevation Model", context.project()
+                f"{area["name"]} (dem)", context.project()
             ),
         )
 

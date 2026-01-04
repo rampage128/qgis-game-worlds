@@ -30,6 +30,7 @@ from qgis.core import (
     QgsTextFormat,
     QgsCurvePolygon,
     QgsMarkerSymbol,
+    QgsProcessingContext,
 )
 from qgis.gui import (
     QgsAbstractProcessingParameterWidgetWrapper,
@@ -278,6 +279,11 @@ class VtolCreateAreaAlgorithm(QgsProcessingAlgorithm):
 
         self.layer_name = layer_name_output
         self.dest_id = dest_id
+
+        context.addLayerToLoadOnCompletion(
+            dest_id,
+            QgsProcessingContext.LayerDetails(f"{map_name} (area)", context.project()),
+        )
 
         return {self.OUTPUT: dest_id}
 
