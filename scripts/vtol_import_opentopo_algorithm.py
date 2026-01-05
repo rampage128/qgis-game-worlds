@@ -229,7 +229,7 @@ class VtolImportOpenTopoAlgorithm(QgsProcessingAlgorithm):
         context.addLayerToLoadOnCompletion(
             output,
             QgsProcessingContext.LayerDetails(
-                f"{area["name"] (opentopo)}", context.project()
+                f"{area["name"]} (opentopo)", context.project()
             ),
         )
 
