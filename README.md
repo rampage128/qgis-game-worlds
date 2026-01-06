@@ -29,9 +29,12 @@ We will mainly use the `Processing Toolbox` to execute the scripts. They aim to 
 
 You will need a bit of understanding of QGIS and it can seem overwhelming at first... But don't worry, we will only use <1% of all features.
 
-Start a new QGIS project and open the `Processing Toolbox` under `View` -> `Panels`, if it is not open yet on the right.
+### Preparation
 
-In the toolbox expand `Scripts` (at the very bottom) and expand `VTOL VR` that should be in there.
+Before we can create a map we need a bit of (one time) preparation:
+
+- Start a new QGIS project and open the `Processing Toolbox` under `View` -> `Panels`, if it is not open yet on the right.
+- In the toolbox expand `Scripts` (at the very bottom) and expand `VTOL VR` that should be in there.
 You will see the scripts. 
 
 Important to note:
@@ -39,24 +42,40 @@ Important to note:
 - The UI has two steps:
   - Filling in the parameters (has step by step instructions on the right)
   - Running the script
-- When you run a script, the dialog will stay open when finished. You have to close it manually.
+- When you run a script, the dialog will print out information about the process.
 - Any output that was generated will be added as a layer in your main QGIS window.
+- When the script is finished you can check the results, and close the dialog.
 
-Just run the scripts in this order:
+### Step 1: Map Area
 
-1. Create Map Area: Allows you to create a map area that is used to export part of your height data. Map areas can be moved around and contain the config of a map.
-2. Importing height data (you only need one of those)
-   - Import OpenTopography Data: Directly downloads high quality DEM data from OpenTopography.
-   - Import DEM Data: Allows you to select manually downloaded .hgt files to start a high quality heightmap.
-   - Import XYZ Data: Allows you to import height data without any manual download (easier but slow and results may vary).
-3. [Optional] Create City Zones: Provides you with a way to draw (and edit) the VTOL VR cities. If you do not care about cities you can skip this step.
-4. Export Map Area: This step takes the data from the other 3 steps and allows you to do a final export of all the required game files.
+Run the script `Create Map Area`. It allows you to select the location, size and map options. All the following steps rely on a map area to be present. After finishing, you should see a box in the main window that shows your map area.
+
+### Step 2: Import Height Data
+
+To get some landscaping going, we have 3 alternatives. 
+
+You only need to run **one** of the following scripts:
+- `Import OpenTopography Data` (recommended): Directly downloads high quality DEM data from OpenTopography.org.
+- `Import DEM Data`: Allows you to select manually downloaded .hgt files to start a high quality heightmap.
+- `Import XYZ Data`: Allows you to import height data without any manual download (easier but slow and results may vary).
 
 > [!TIP]
-> Each script has embedded documentation that should appear on the right side. Also the scripts take care of all the complications of geographic projection for you, so you do not have to worry about any of that.
+> Read more about the different sources [here](./docs/dem-sources.md). (I recommend using OpenTopography.)
+
+### Step 3: Cities
+
+This step is optional. It allows you to draw and edit cities in QGIS directly, which is more accurate and convenient than painting them ingame.
+
+Run `Create City Zones`. It will create a special empty layer for you to draw cities on.  
+
+> [!TIP]
+> Even if you do not want to save a project, I recommend saving the output to a file if you want to edit the cities later.
 
 > [!NOTE]
-> If you want to draw cities, that will require some QGIS interaction to draw polygons, the `Create City Zones` script has some steps in the embedded documentation.
+> If you want to draw cities, you need to draw polygons on the city layer. Here is some documentation on how that works: [QGIS layer digitizing](https://docs.qgis.org/3.40/en/docs/user_manual/working_with_vector/editing_geometry_attributes.html#digitizing-an-existing-layer)
+
+### Step 4: Export
+Run `Export Map Area`. This step takes the data from the other steps and allows you to do a final export of all the required game files. Select a folder as output destination. This folder will be your ready-to-use map.
 
 **That's it!** 
 
