@@ -425,6 +425,7 @@ class Highlighter(QgsAbstractProcessingParameterWidgetWrapper):
     def createWidget(self):
         container = QWidget()
         layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         self.container = container
         self.layout = layout
