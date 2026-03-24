@@ -178,6 +178,9 @@ class VtolImportOpenTopoAlgorithm(QgsProcessingAlgorithm):
             map_area_layer.crs(), epsg_4326, project_context
         )
 
+        to_pseudo.setAllowFallbackTransforms(True)
+        to_pseudo.setBallparkTransformsAreAppropriate(True)
+
         if not to_pseudo.isValid():
             raise QgsProcessingException(
                 f"Transform from {map_area_layer.crs().authid()} to {epsg_4326.authid()} is not valid."
@@ -190,6 +193,11 @@ class VtolImportOpenTopoAlgorithm(QgsProcessingAlgorithm):
             raise QgsProcessingException(
                 f"Transform from {map_area_layer.crs().authid()} to {epsg_4326.authid()} failed with status: {transform_result}"
             )
+
+        transform_details = to_pseudo.instantiatedCoordinateOperationDetails()
+
+        if transform_details.accuracy < 0 or not transform_details.isAvailable:
+            feedback.pushInfo("Extent was transformed using a 'ballpark' calculation.")
 
         xyz_extent = map_area_geometry.boundingBox()
 
