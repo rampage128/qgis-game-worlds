@@ -33,8 +33,9 @@ from qgis.core import (
 
 from qgis.PyQt.QtCore import QVariant
 from qgis import processing
-from typing import Optional
+from typing import Optional, cast
 import requests
+import os
 
 
 class QgsProcessingParameterGeoTiffDestination(QgsProcessingParameterRasterDestination):
@@ -53,6 +54,67 @@ class QgsProcessingParameterGeoTiffDestination(QgsProcessingParameterRasterDesti
 
     def supportedOutputRasterLayerExtensions(self):
         return ["tif", "tiff"]
+
+
+class OpenTopoResult:
+    """Encapsulates the status and data of an OpenTopography download request."""
+
+    def __init__(
+        self,
+        parameters: str,
+        code: int,
+        dem_file: str = None,
+        error: str = None,
+    ):
+        self.__parameters = parameters
+        self.__code = code
+        self.__dem_file = dem_file
+        self.__error = error
+
+    def report(self):
+        status = "Success" if self.__error is None else "Failure"
+
+        parameters = self.__parameters.split("&")
+        parameter_details = "\n".join(parameters)
+
+        error_details = ""
+        if self.__error is not None:
+            error_details = (
+                "Error Details\n" f"Code: {self.__code}\n" f"{self.__error}\n\n"
+            )
+
+        file_details = ""
+        if self.__dem_file is not None:
+            file_size = os.path.getsize(self.__dem_file)
+            file_details = (
+                "DEM File\n" f"Path: {self.__dem_file}\n" f"Size: {file_size} bytes\n\n"
+            )
+
+        return (
+            "\nOpenTopo download report\n\n"
+            f"Status: {status}\n\n"
+            f"{error_details}"
+            "Parameters\n"
+            f"{parameter_details}\n\n"
+            f"{file_details}"
+        )
+
+    @property
+    def dem(self):
+        return self.__dem_file
+
+    def failed(self):
+        return self.__error is not None
+
+    @classmethod
+    def fromFailure(
+        cls, parameters: str, code: int, message: str, dem_file: str = None
+    ):
+        return cls(parameters, code, dem_file, message)
+
+    @classmethod
+    def fromSuccess(cls, parameters: str, dem_file: str):
+        return cls(parameters, 200, dem_file)
 
 
 class VtolImportOpenTopoAlgorithm(QgsProcessingAlgorithm):
@@ -201,7 +263,14 @@ class VtolImportOpenTopoAlgorithm(QgsProcessingAlgorithm):
 
         xyz_extent = map_area_geometry.boundingBox()
 
-        dem_data = self._download_dem(dem_source, xyz_extent, api_key, feedback)
+        download_result = self._download_dem(dem_source, xyz_extent, api_key, feedback)
+
+        feedback.pushInfo(download_result.report())
+
+        if download_result.failed():
+            raise QgsProcessingException(
+                "Download of DEM data failed. Please refer to the report above."
+            )
 
         if feedback.isCanceled():
             return {}
@@ -214,7 +283,7 @@ class VtolImportOpenTopoAlgorithm(QgsProcessingAlgorithm):
         output = processing.run(
             "gdal:warpreproject",
             {
-                "INPUT": dem_data,
+                "INPUT": download_result.dem,
                 # "SOURCE_CRS": epsg_4326,
                 "TARGET_CRS": map_area_layer,
                 "RESAMPLING": target_resampling,
@@ -250,19 +319,59 @@ class VtolImportOpenTopoAlgorithm(QgsProcessingAlgorithm):
         api_key: str,
         feedback: QgsProcessingFeedback,
     ):
-        url = (
-            f"https://portal.opentopography.org/API/globaldem?"
+        parameters = (
             f"demtype={dem_source}&"
             f"south={extent.yMinimum()}&north={extent.yMaximum()}&"
             f"west={extent.xMinimum()}&east={extent.xMaximum()}&"
-            f"outputFormat=GTiff&API_Key={api_key}"
+            f"outputFormat=GTiff"
         )
 
-        feedback.pushInfo(f"Downloading from: {url}")
+        url = (
+            f"https://portal.opentopography.org/API/globaldem?"
+            f"{parameters}"
+            f"&API_Key={api_key}"
+        )
+
+        if abs(extent.width()) > 360:
+            raise QgsProcessingException(
+                "Can not download from opentopo: extent has an invalid unit (expected degrees)."
+            )
+
+        feedback.pushInfo(f"Downloading...")
 
         try:
-            with requests.get(url, stream=True, timeout=20) as r:
-                r.raise_for_status()
+            with requests.get(url, stream=True, timeout=20) as response:
+                r = cast(requests.Response, response)
+                if r.status_code != 200:
+                    raw_error = r.text.strip()
+
+                    error_map = {
+                        401: "Invalid or missing API key.",
+                        204: "No DEM data available for the specified extent or demtype.",
+                        400: f"Bad Request: {raw_error if raw_error else 'Check area limits.'}",
+                        429: "Rate limit exceeded. Daily quota depleted.",
+                        500: "OpenTopography internal server error. Retry later.",
+                    }
+                    status_message = error_map.get(
+                        r.status_code, f"Unexpected Error: {raw_error}"
+                    )
+
+                    return OpenTopoResult.fromFailure(
+                        parameters, r.status_code, status_message
+                    )
+
+                # Check content type
+                content_type = r.headers.get("Content-Type", "").lower()
+                if (
+                    "image/tiff" not in content_type
+                    and "application/octet-stream" not in content_type
+                ):
+                    preview = r.text[:200]
+                    return OpenTopoResult.fromFailure(
+                        parameters,
+                        r.status_code,
+                        f"Unexpected data format: {content_type}\nExcerpt: {preview} [...]",
+                    )
 
                 # Determine file size for the progress bar
                 total_size = int(r.headers.get("content-length", 0))
@@ -273,7 +382,12 @@ class VtolImportOpenTopoAlgorithm(QgsProcessingAlgorithm):
                 with open(temp_tif, "wb") as f:
                     for chunk in r.iter_content(chunk_size=1024 * 1024):  # 1MB Chunks
                         if feedback.isCanceled():
-                            return {}
+                            f.close()
+                            return OpenTopoResult.fromFailure(
+                                parameters,
+                                0,
+                                f"Download canceled by user at {downloaded} bytes",
+                            )
 
                         f.write(chunk)
                         downloaded += len(chunk)
@@ -281,17 +395,14 @@ class VtolImportOpenTopoAlgorithm(QgsProcessingAlgorithm):
                         if total_size > 0:
                             percentage = (downloaded / total_size) * 100
                             feedback.setProgress(percentage)
-                            # feedback.setProgressText(f"Downloading: {percentage:.1f}%")
 
-                return temp_tif
-        except requests.exceptions.HTTPError as e:
-            raise QgsProcessingException(
-                f"OpenTopo Server Error: {e.response.text[:200]}"
-            )
+                return OpenTopoResult.fromSuccess(parameters, temp_tif)
         except Exception as e:
-            raise QgsProcessingException(f"K11 Telemetry Failure: {str(e)}")
-
-        return None
+            return OpenTopoResult.fromFailure(
+                parameters,
+                0,
+                f"Unexpected Error: {str(e)}",
+            )
 
     def name(self):
         return "vtolvr_opentopo_import"
