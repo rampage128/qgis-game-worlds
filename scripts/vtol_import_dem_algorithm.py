@@ -180,7 +180,6 @@ class VtolImportDemAlgorithm(QgsProcessingAlgorithm):
                 "DATA_TYPE": 6,
                 "TARGET_EXTENT": None,
                 "TARGET_EXTENT_CRS": None,
-                "MULTITHREADING": True,
                 "EXTRA": "-multi -wo NUM_THREADS=ALL_CPUS -to ALLOW_BALLPARK=NO -to ONLY_BEST=YES",
                 "OUTPUT": target_file,
             },
